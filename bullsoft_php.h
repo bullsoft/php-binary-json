@@ -32,4 +32,4 @@
     extname## _ ##name## _ce->ce_flags |= flags;  \
   }
 
-#endif;
+#endif

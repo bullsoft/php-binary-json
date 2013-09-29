@@ -1,0 +1,13 @@
+// $Id$
+// vim:ft=javascript
+
+// If your extension references something external, use ARG_WITH
+// ARG_WITH("binaryjson", "for binaryjson support", "no");
+
+// Otherwise, use ARG_ENABLE
+// ARG_ENABLE("binaryjson", "enable binaryjson support", "no");
+
+if (PHP_BINARYJSON != "no") {
+	EXTENSION("binaryjson", "binaryjson.c");
+}
+
