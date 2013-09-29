@@ -32,4 +32,21 @@
     extname## _ ##name## _ce->ce_flags |= flags;  \
   }
 
+#define HASH_P(a) (Z_TYPE_P(a) == IS_ARRAY ? Z_ARRVAL_P(a) : Z_OBJPROP_P(a))
+#define HASH_PP(a) (Z_TYPE_PP(a) == IS_ARRAY ? Z_ARRVAL_PP(a) : Z_OBJPROP_PP(a))
+
+#define IS_SCALAR_P(a) (Z_TYPE_P(a) == IS_NULL || Z_TYPE_P(a) == IS_LONG || Z_TYPE_P(a) == IS_DOUBLE || Z_TYPE_P(a) == IS_BOOL || Z_TYPE_P(a) == IS_STRING)
+#define IS_SCALAR_PP(a) IS_SCALAR_P(*a)
+#define IS_ARRAY_OR_OBJECT_P(a) (Z_TYPE_P(a) == IS_ARRAY || Z_TYPE_P(a) == IS_OBJECT)
+
+/* TODO: this should be expanded to handle long_as_object being set */
+#define Z_NUMVAL_P(variable, value)                                     \
+  ((Z_TYPE_P(variable) == IS_LONG && Z_LVAL_P(variable) == value) ||    \
+   (Z_TYPE_P(variable) == IS_DOUBLE && Z_DVAL_P(variable) == value))
+#define Z_NUMVAL_PP(variable, value)                                    \
+  ((Z_TYPE_PP(variable) == IS_LONG && Z_LVAL_PP(variable) == value) ||  \
+   (Z_TYPE_PP(variable) == IS_DOUBLE && Z_DVAL_PP(variable) == value))
+
+#define BULLSOFT_EXCEPTION(msg) zend_throw_exception(zend_exception_get_default(TSRMLS_C), #msg, 0 TSRMLS_CC);
+
 #endif

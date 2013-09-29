@@ -45,17 +45,53 @@ PHP_RINIT_FUNCTION(binaryjson);
 PHP_RSHUTDOWN_FUNCTION(binaryjson);
 PHP_MINFO_FUNCTION(binaryjson);
 
-PHP_FUNCTION(confirm_binaryjson_compiled);	/* For testing, remove later. */
+#ifdef WIN32
+# ifndef int64_t
+typedef __int64 int64_t;
+# endif
+#endif
 
-/* 
-  	Declare any global variables you may need between the BEGIN
-	and END macros here:     
+typedef struct {
+	char *start;
+	char *pos;
+	char *end;
+} buffer;
+
+#define BUF_REMAINING (buf->end-buf->pos)
+
+#define CREATE_BUF(buf, size) \
+	buf.start = (char*)emalloc(size); \
+	buf.pos = buf.start; \
+	buf.end = buf.start + size;
+
+#define PHP_BINARYJSON_SERIALIZE_KEY(type) \
+	php_binaryjson_set_type(buf, type); \
+	php_binaryjson_serialize_key(buf, name, name_len, prep TSRMLS_CC); \
+	if (EG(exception)) { \
+		return ZEND_HASH_APPLY_STOP; \
+	}
+
+#define DEFAULT_MAX_MESSAGE_SIZE  (32 * 1024 * 1024)
+#define DEFAULT_MAX_DOCUMENT_SIZE (16 * 1024 * 1024)
+
+#define INITIAL_BUF_SIZE 4096
+#define INT_32 4
+#define INT_64 8
+#define DOUBLE_64 8
+#define BYTE_8 1
+
+#define PREP 1
+#define NO_PREP 0
+
+PHP_FUNCTION(binaryjson_encode);
+PHP_FUNCTION(binaryjson_decode);
 
 ZEND_BEGIN_MODULE_GLOBALS(binaryjson)
-	long  global_value;
-	char *global_string;
+	char *cmd_char;
+	long native_long;
+	long long_as_object;
+	long allow_empty_keys;
 ZEND_END_MODULE_GLOBALS(binaryjson)
-*/
 
 /* In every utility function you add that needs to use variables 
    in php_binaryjson_globals, call TSRMLS_FETCH(); after declaring other 
