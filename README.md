@@ -1,7 +1,12 @@
-php binary json
+PHP Binary Json
 =======
 
-A simple data serializer in C, wrapped in php extension
+Bson written in C, wrapped in php extension.
+
+Reference
+=======
+ - http://bsonspec.org/
+ - https://github.com/mongodb/mongo-php-driver
 
 
 Test Conditions
