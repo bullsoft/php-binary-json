@@ -41,21 +41,8 @@ static int apply_func_args_wrapper(void **data TSRMLS_DC, int num_args, va_list 
 #else
 static int apply_func_args_wrapper(void **data, int num_args, va_list args, zend_hash_key *key);
 #endif
+
 static int is_utf8(const char *s, int len);
-
-#define CHECK_BUFFER_LEN(len) \
-	do { \
-		if (buf + (len) >= buf_end) { \
-			zval_ptr_dtor(&value); \
-			zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 21 TSRMLS_CC, "Reading data for type %02x would exceed buffer for key \"%s\"", (unsigned char) type, name); \
-			return 0; \
-		} \
-	} while (0)
-
-ZEND_DECLARE_MODULE_GLOBALS(binaryjson)
-
-/* True global resources - no need for thread safety here */
-static int le_binaryjson;
 
 /* {{{ binaryjson_functions[]
  *
@@ -92,34 +79,12 @@ zend_module_entry binaryjson_module_entry = {
 ZEND_GET_MODULE(binaryjson)
 #endif
 
-/* {{{ PHP_INI
- */
-PHP_INI_BEGIN()
-	STD_PHP_INI_ENTRY("binaryjson.cmd", "$", PHP_INI_ALL, OnUpdateStringUnempty, cmd_char, zend_binaryjson_globals, binaryjson_globals)
-	STD_PHP_INI_ENTRY("binaryjson.native_long", "0", PHP_INI_ALL, OnUpdateLong, native_long, zend_binaryjson_globals, binaryjson_globals)
-	STD_PHP_INI_ENTRY("binaryjson.long_as_object", "0", PHP_INI_ALL, OnUpdateLong, long_as_object, zend_binaryjson_globals, binaryjson_globals)
-	STD_PHP_INI_ENTRY("binaryjson.allow_empty_keys", "0", PHP_INI_ALL, OnUpdateLong, allow_empty_keys, zend_binaryjson_globals, binaryjson_globals)
-PHP_INI_END()
-/* }}} */
-
-/* {{{ php_binaryjson_init_globals
- */
-/* Uncomment this function if you have INI entries
-static void php_binaryjson_init_globals(zend_binaryjson_globals *binaryjson_globals)
-{
-	binaryjson_globals->global_value = 0;
-	binaryjson_globals->global_string = NULL;
-}
-*/
 /* }}} */
 
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(binaryjson)
 {
-	/* If you have INI entries, uncomment these lines 
-	REGISTER_INI_ENTRIES();
-	*/
 	return SUCCESS;
 }
 /* }}} */
@@ -128,9 +93,6 @@ PHP_MINIT_FUNCTION(binaryjson)
  */
 PHP_MSHUTDOWN_FUNCTION(binaryjson)
 {
-	/* uncomment this line if you have INI entries
-	UNREGISTER_INI_ENTRIES();
-	*/
 	return SUCCESS;
 }
 /* }}} */
@@ -229,6 +191,18 @@ void php_binaryjson_serialize_bytes(buffer *buf, char *str, int str_len)
 	buf->pos += str_len;
 }
 
+static int php_binaryjson_serialize_size(char *start, buffer *buf, int max_size TSRMLS_DC)
+{
+	int total = MONGO_32((buf->pos - start));
+
+	if (buf->pos - start > max_size) {
+		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 3 TSRMLS_CC, "document fragment is too large: %d, max: %d", buf->pos - start, max_size);
+		return FAILURE;
+	}
+	memcpy(start, &total, INT_32);
+	return SUCCESS;
+}
+
 void php_binaryjson_serialize_string(buffer *buf, char *str, int str_len)
 {
 	if (BUF_REMAINING <= str_len + 1) {
@@ -285,7 +259,7 @@ void php_binaryjson_serialize_double(buffer *buf, double num)
  */
 void php_binaryjson_serialize_key(buffer *buf, const char *str, int str_len, int prep TSRMLS_DC)
 {
-	if (str[0] == '\0' && !BINARYJSON_G(allow_empty_keys)) {
+	if (str[0] == '\0') {
 		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 1 TSRMLS_CC, "zero-length keys are not allowed, did you use $ with double quotes?");
 		return;
 	}
@@ -304,12 +278,7 @@ void php_binaryjson_serialize_key(buffer *buf, const char *str, int str_len, int
 		return;
 	}
 
-	if (BINARYJSON_G(cmd_char) && strchr(str, BINARYJSON_G(cmd_char)[0]) == str) {
-		*(buf->pos) = '$';
-		memcpy(buf->pos + 1, str + 1, str_len-1);
-	} else {
-		memcpy(buf->pos, str, str_len);
-	}
+    memcpy(buf->pos, str, str_len);
 
 	/* add \0 at the end of the string */
 	buf->pos[str_len] = 0;
@@ -403,22 +372,8 @@ int php_binaryjson_serialize_element(const char *name, int name_len, zval **data
 			break;
 
 		case IS_LONG:
-			if (BINARYJSON_G(native_long)) {
-#if SIZEOF_LONG == 4
-			PHP_BINARYJSON_SERIALIZE_KEY(BSON_INT);
-			php_binaryjson_serialize_int(buf, Z_LVAL_PP(data));
-#else
-# if SIZEOF_LONG == 8
-			PHP_BINARYJSON_SERIALIZE_KEY(BSON_LONG);
-			php_binaryjson_serialize_long(buf, Z_LVAL_PP(data));
-# else
-#  error The PHP number size is neither 4 or 8 bytes; no clue what to do with that!
-# endif
-#endif
-			} else {
-				PHP_BINARYJSON_SERIALIZE_KEY(BSON_INT);
-				php_binaryjson_serialize_int(buf, Z_LVAL_PP(data));
-			}
+            PHP_BINARYJSON_SERIALIZE_KEY(BSON_INT);
+            php_binaryjson_serialize_int(buf, Z_LVAL_PP(data));
 			break;
 
 		case IS_DOUBLE:
@@ -439,7 +394,6 @@ int php_binaryjson_serialize_element(const char *name, int name_len, zval **data
 				zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 12 TSRMLS_CC, "non-utf8 string: %s", Z_STRVAL_PP(data));
 				return ZEND_HASH_APPLY_STOP;
 			}
-
 			php_binaryjson_serialize_int(buf, Z_STRLEN_PP(data) + 1);
 			php_binaryjson_serialize_string(buf, Z_STRVAL_PP(data), Z_STRLEN_PP(data));
 			break;

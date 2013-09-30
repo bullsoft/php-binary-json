@@ -64,6 +64,15 @@ typedef struct {
 	buf.pos = buf.start; \
 	buf.end = buf.start + size;
 
+#define CHECK_BUFFER_LEN(len) \
+	do { \
+		if (buf + (len) >= buf_end) { \
+			zval_ptr_dtor(&value); \
+			zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 21 TSRMLS_CC, "Reading data for type %02x would exceed buffer for key \"%s\"", (unsigned char) type, name); \
+			return 0; \
+		} \
+	} while (0)
+
 #define PHP_BINARYJSON_SERIALIZE_KEY(type) \
 	php_binaryjson_set_type(buf, type); \
 	php_binaryjson_serialize_key(buf, name, name_len, prep TSRMLS_CC); \
@@ -85,29 +94,6 @@ typedef struct {
 
 PHP_FUNCTION(binaryjson_encode);
 PHP_FUNCTION(binaryjson_decode);
-
-ZEND_BEGIN_MODULE_GLOBALS(binaryjson)
-	char *cmd_char;
-	long native_long;
-	long long_as_object;
-	long allow_empty_keys;
-ZEND_END_MODULE_GLOBALS(binaryjson)
-
-/* In every utility function you add that needs to use variables 
-   in php_binaryjson_globals, call TSRMLS_FETCH(); after declaring other 
-   variables used by that function, or better yet, pass in TSRMLS_CC
-   after the last function argument and declare your utility function
-   with TSRMLS_DC after the last declared argument.  Always refer to
-   the globals in your function as BINARYJSON_G(variable).  You are 
-   encouraged to rename these macros something shorter, see
-   examples in any other php module directory.
-*/
-
-#ifdef ZTS
-#define BINARYJSON_G(v) TSRMG(binaryjson_globals_id, zend_binaryjson_globals *, v)
-#else
-#define BINARYJSON_G(v) (binaryjson_globals.v)
-#endif
 
 #include "bullsoft_php.h"
 
