@@ -51,11 +51,28 @@ typedef __int64 int64_t;
 # endif
 #endif
 
+/* op codes */
+#define OP_REPLY 1
+#define OP_MSG 1000
+#define OP_UPDATE 2001
+#define OP_INSERT 2002
+#define OP_GET_BY_OID 2003
+#define OP_QUERY 2004
+#define OP_GET_MORE 2005
+#define OP_DELETE 2006
+
 typedef struct {
 	char *start;
 	char *pos;
 	char *end;
 } buffer;
+
+typedef struct {
+	int length;
+	int request_id;
+	int response_to;
+	int op;
+} binaryjson_msg_header;
 
 #define BUF_REMAINING (buf->end-buf->pos)
 
@@ -72,6 +89,33 @@ typedef struct {
 			return 0; \
 		} \
 	} while (0)
+
+#define CREATE_MSG_HEADER(rid, rto, opcode) \
+	header.length = 0; \
+	header.request_id = rid; \
+	header.response_to = rto; \
+	header.op = opcode;
+
+#define CREATE_RESPONSE_HEADER(buf, ns, rto, opcode) \
+	CREATE_MSG_HEADER(BINARYJSON_G(request_id)++, rto, opcode); \
+	APPEND_HEADER_NS(buf, ns, 0);
+
+#define CREATE_HEADER_WITH_OPTS(buf, ns, opcode, opts) \
+	CREATE_MSG_HEADER(BINARYJSON_G(request_id)++, 0, opcode); \
+	APPEND_HEADER_NS(buf, ns, opts);
+
+#define CREATE_HEADER(buf, ns, opcode) \
+	CREATE_RESPONSE_HEADER(buf, ns, 0, opcode);
+
+#define APPEND_HEADER(buf, opts) buf->pos += INT_32; \
+	php_binaryjson_serialize_int(buf, header.request_id); \
+	php_binaryjson_serialize_int(buf, header.response_to); \
+	php_binaryjson_serialize_int(buf, header.op); \
+	php_binaryjson_serialize_int(buf, opts);
+
+#define APPEND_HEADER_NS(buf, ns, opts) \
+	APPEND_HEADER(buf, opts); \
+	php_binaryjson_serialize_ns(buf, ns TSRMLS_CC);
 
 #define PHP_BINARYJSON_SERIALIZE_KEY(type) \
 	php_binaryjson_set_type(buf, type); \
@@ -94,6 +138,32 @@ typedef struct {
 
 PHP_FUNCTION(binaryjson_encode);
 PHP_FUNCTION(binaryjson_decode);
+PHP_FUNCTION(binaryjson_header_pack);
+PHP_FUNCTION(binaryjson_header_unpack);
+PHP_FUNCTION(binaryjson_msg_pack);
+PHP_FUNCTION(binaryjson_msg_unpack);
+
+ZEND_BEGIN_MODULE_GLOBALS(binaryjson)
+long request_id;
+int inc, pid, machine;
+ZEND_END_MODULE_GLOBALS(binaryjson)
+
+/* In every utility function you add that needs to use variables 
+   in php_binaryjson_globals, call TSRMLS_FETCH(); after declaring other 
+   variables used by that function, or better yet, pass in TSRMLS_CC
+   after the last function argument and declare your utility function
+   with TSRMLS_DC after the last declared argument.  Always refer to
+   the globals in your function as BINARYJSON_G(variable).  You are 
+   encouraged to rename these macros something shorter, see
+   examples in any other php module directory.
+*/
+
+#ifdef ZTS
+#define BINARYJSON_G(v) TSRMG(binaryjson_globals_id, zend_binaryjson_globals *, v)
+#else
+#define BINARYJSON_G(v) (binaryjson_globals.v)
+#endif
+
 
 #include "bullsoft_php.h"
 

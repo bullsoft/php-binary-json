@@ -12,5 +12,5 @@ dnl Make sure that the comment is aligned:
 [  --with-binaryjson             Include binaryjson support])
 
 if test "$PHP_BINARYJSON" != "no"; then
-   PHP_NEW_EXTENSION(binaryjson, binaryjson.c, $ext_shared)
+   PHP_NEW_EXTENSION(binaryjson, binaryjson.c id.c, $ext_shared)
 fi

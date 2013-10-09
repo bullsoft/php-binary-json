@@ -27,7 +27,10 @@
 #include "ext/standard/info.h"
 #include "php_binaryjson.h"
 #include "binaryjson.h"
+#include "id.h"
 #include "zend_exceptions.h"
+
+ZEND_DECLARE_MODULE_GLOBALS(binaryjson)
 
 #ifdef WIN32
 #  include <memory.h>
@@ -49,8 +52,12 @@ static int is_utf8(const char *s, int len);
  * Every user visible function must have an entry in binaryjson_functions[].
  */
 const zend_function_entry binaryjson_functions[] = {
-	PHP_FE(binaryjson_encode,	NULL)
-	PHP_FE(binaryjson_decode,	NULL)
+	PHP_FE(binaryjson_encode,	     NULL)
+	PHP_FE(binaryjson_decode,	     NULL)
+    PHP_FE(binaryjson_header_pack,   NULL)
+    PHP_FE(binaryjson_header_unpack, NULL)
+    PHP_FE(binaryjson_msg_pack,      NULL)
+    PHP_FE(binaryjson_msg_unpack,    NULL)
 	PHP_FE_END	/* Must be the last line in binaryjson_functions[] */
 };
 /* }}} */
@@ -81,10 +88,74 @@ ZEND_GET_MODULE(binaryjson)
 
 /* }}} */
 
+static void php_binaryjson_init_globals(zend_binaryjson_globals *binaryjson_globals)
+{
+    binaryjson_globals->request_id = 3;
+    
+	/* On windows, the max length is 256. Linux doesn't have a limit, but it
+	 * will fill in the first 256 chars of hostname even if the actual
+	 * hostname is longer. If you can't get a unique character in the first
+	 * 256 chars of your hostname, you're doing it wrong. */
+	int len, win_max = 256;
+	char *hostname, host_start[256];
+	register ulong hash;
+
+	hostname = host_start;
+	/* from the gnu manual:
+	 *     gethostname stores the beginning of the host name in name even if the
+	 *     host name won't entirely fit. For some purposes, a truncated host name
+	 *     is good enough. If it is, you can ignore the error code.
+	 * So we'll ignore the error code.
+	 * Returns 0-terminated hostname. */
+	gethostname(hostname, win_max);
+	len = strlen(hostname);
+
+	hash = 5381;
+
+	/* from zend_hash.h */
+	/* variant with the hash unrolled eight times */
+	for (; len >= 8; len -= 8) {
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+		hash = ((hash << 5) + hash) + *hostname++;
+	}
+
+	switch (len) {
+		case 7: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 6: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 5: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 4: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 3: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 2: hash = ((hash << 5) + hash) + *hostname++; /* fallthrough... */
+		case 1: hash = ((hash << 5) + hash) + *hostname++; break;
+		case 0: break;
+	}
+
+	binaryjson_globals->machine = hash;
+
+	binaryjson_globals->inc = rand() & 0xFFFFFF;
+}
+
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(binaryjson)
 {
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_REPLY"      , OP_REPLY         , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_MSG"        , OP_MSG           , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_UPDATE"     , OP_UPDATE        , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_INSERT"     , OP_INSERT        , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_GET_BY_OID" , OP_GET_BY_OID    , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_QUERY"      , OP_QUERY         , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_GET_MORE"   , OP_GET_MORE      , CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT("BINARYJSON_HEADER_OP_DELETE"     , OP_DELETE        , CONST_CS | CONST_PERSISTENT);
+
+    ZEND_INIT_MODULE_GLOBALS(binaryjson, php_binaryjson_init_globals, NULL);
+    
 	return SUCCESS;
 }
 /* }}} */
@@ -129,6 +200,18 @@ PHP_MINFO_FUNCTION(binaryjson)
 }
 /* }}} */
 
+static int php_binaryjson_serialize_size(char *start, buffer *buf, int max_size TSRMLS_DC)
+{
+	int total = MONGO_32((buf->pos - start));
+
+	if (buf->pos - start > max_size) {
+		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 3 TSRMLS_CC, "document fragment is too large: %d, max: %d", buf->pos - start, max_size);
+		return FAILURE;
+	}
+	memcpy(start, &total, INT_32);
+	return SUCCESS;
+}
+
 /* serialize a zval */
 int zval_to_binaryjson(buffer *buf, HashTable *hash, int prep, int max_document_size TSRMLS_DC)
 {
@@ -148,10 +231,10 @@ int zval_to_binaryjson(buffer *buf, HashTable *hash, int prep, int max_document_
 	buf->pos += INT_32;
 
 	if (zend_hash_num_elements(hash) > 0) {
-	/* 	if (prep) { */
-	/* 		prep_obj_for_db(buf, hash TSRMLS_CC); */
-	/* 		num++; */
-	/* 	} */
+    	if (prep) {
+			prep_id_for_binaryjson(buf, hash TSRMLS_CC);
+			num++;
+		}
 #if PHP_VERSION_ID >= 50300
 		zend_hash_apply_with_arguments(hash TSRMLS_CC, (apply_func_args_t)apply_func_args_wrapper, 3, buf, prep, &num);
 #else
@@ -191,18 +274,6 @@ void php_binaryjson_serialize_bytes(buffer *buf, char *str, int str_len)
 	buf->pos += str_len;
 }
 
-static int php_binaryjson_serialize_size(char *start, buffer *buf, int max_size TSRMLS_DC)
-{
-	int total = MONGO_32((buf->pos - start));
-
-	if (buf->pos - start > max_size) {
-		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 3 TSRMLS_CC, "document fragment is too large: %d, max: %d", buf->pos - start, max_size);
-		return FAILURE;
-	}
-	memcpy(start, &total, INT_32);
-	return SUCCESS;
-}
-
 void php_binaryjson_serialize_string(buffer *buf, char *str, int str_len)
 {
 	if (BUF_REMAINING <= str_len + 1) {
@@ -222,7 +293,6 @@ void php_binaryjson_serialize_int(buffer *buf, int num)
 	if (BUF_REMAINING <= INT_32) {
 		binaryjson_resize_buf(buf, INT_32);
 	}
-
 	memcpy(buf->pos, &i, INT_32);
 	buf->pos += INT_32;
 }
@@ -360,6 +430,16 @@ static int apply_func_args_wrapper(void **data, int num_args, va_list args, zend
 	}
 }
 
+void php_binaryjson_serialize_ns(buffer *buf, char *str TSRMLS_DC)
+{
+	if (BUF_REMAINING <= (int)strlen(str) + 1) {
+		binaryjson_resize_buf(buf, strlen(str) + 1);
+	}
+    memcpy(buf->pos, str, strlen(str));
+    buf->pos[strlen(str)] = 0;
+    buf->pos += strlen(str) + 1;
+}
+
 int php_binaryjson_serialize_element(const char *name, int name_len, zval **data, buffer *buf, int prep TSRMLS_DC)
 {
 	if (prep && strcmp(name, "_id") == 0) {
@@ -422,6 +502,27 @@ int php_binaryjson_serialize_element(const char *name, int name_len, zval **data
 		}
 	}
 	return ZEND_HASH_APPLY_KEEP;
+}
+
+static int prep_id_for_binaryjson(buffer *buf, HashTable *array TSRMLS_DC)
+{
+	zval **data, *newid;
+
+	/* if _id field doesn't exist, add it */
+	if (zend_hash_find(array, "_id", 4, (void**)&data) == FAILURE) {
+		/* create new MongoId */
+		MAKE_STD_ZVAL(newid);
+		php_binaryjson_id_populate(newid, NULL TSRMLS_CC);
+		/* add to obj */
+		zend_hash_add(array, "_id", 4, &newid, sizeof(zval*), NULL);
+		/* set to data */
+		data = &newid;
+	}
+	php_binaryjson_serialize_element("_id", 3, data, buf, 0 TSRMLS_CC);
+	if (EG(exception)) {
+		return FAILURE;
+	}
+	return SUCCESS;
 }
 
 char* binaryjson_to_zval(char *buf, HashTable *result TSRMLS_DC)
@@ -686,6 +787,73 @@ PHP_FUNCTION(binaryjson_decode)
 	}
 	array_init(return_value);
 	binaryjson_to_zval(str, HASH_P(return_value) TSRMLS_CC);
+}
+
+PHP_FUNCTION(binaryjson_header_pack)
+{
+    char *ns;
+    int ns_len, opcode;
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &ns, &ns_len, &opcode) == FAILURE) {
+		return;
+	}
+    buffer buf;
+	CREATE_BUF(buf, INITIAL_BUF_SIZE);
+    binaryjson_msg_header header;
+    CREATE_HEADER((buffer *)(&buf), ns, opcode);
+    RETVAL_STRINGL(buf.start, buf.pos - buf.start, 1);
+}
+
+PHP_FUNCTION(binaryjson_header_unpack)
+{
+    
+}
+
+PHP_FUNCTION(binaryjson_msg_pack)
+{
+    char *ns; 
+    zval *doc;
+    int ns_len;
+    int opcode = 0;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sa|l", &ns, &ns_len, &doc, &opcode) == FAILURE) {
+		return;
+	}
+    buffer buf;
+	CREATE_BUF(buf, INITIAL_BUF_SIZE);
+
+    int head_offset = buf.pos - buf.start;
+
+    binaryjson_msg_header header;
+    CREATE_HEADER((buffer *)(&buf), ns, opcode);
+    
+    int body_offset = buf.pos - buf.start;
+
+    int result = zval_to_binaryjson(&buf, HASH_P(doc), PREP, DEFAULT_MAX_DOCUMENT_SIZE TSRMLS_CC);
+
+	/* throw exception if serialization crapped out */
+	if (EG(exception) || FAILURE == result) {
+        RETVAL_LONG(-1);
+	} else if (0 == result) {
+		/* return if there were 0 elements */
+		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 4 TSRMLS_CC, "no elements in doc");
+        RETVAL_LONG(-2);
+	}
+
+	if (buf.pos - (buf.start + body_offset) > DEFAULT_MAX_DOCUMENT_SIZE) {
+		zend_throw_exception_ex(zend_exception_get_default(TSRMLS_C), 5 TSRMLS_CC, "size of BSON doc is %d bytes, max is %d", buf.pos - (buf.start + body_offset), DEFAULT_MAX_DOCUMENT_SIZE);
+        RETVAL_LONG(-3);        
+	}
+
+	if(php_binaryjson_serialize_size(buf.start + head_offset, &buf, DEFAULT_MAX_DOCUMENT_SIZE TSRMLS_CC) == SUCCESS) {
+        RETVAL_STRINGL(buf.start, buf.pos - buf.start, 1);
+    } else {
+        RETVAL_LONG(-3);
+    }
+}
+
+PHP_FUNCTION(binaryjson_msg_unpack)
+{
+    
 }
 
 /*
