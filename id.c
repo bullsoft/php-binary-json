@@ -114,32 +114,10 @@ void php_binaryjson_id_populate(zval *newid, zval *id TSRMLS_DC)
 
       bid[i] = digit1 * 16 + digit2;
     }
-    
   } else {
     generate_id(bid TSRMLS_CC);
   }
   char *tmp_id;
   tmp_id = php_binaryjson_id_to_hex(bid);
   ZVAL_STRING(newid, tmp_id, 0);
-}
-
-int php_binaryjson_id_serialize(char *id, unsigned char **serialized_data, zend_uint *serialized_length, zend_serialize_data *var_hash TSRMLS_DC)
-{
-  char *tmp_id;
-  tmp_id = php_binaryjson_id_to_hex(id);
-  *(serialized_length) = strlen(tmp_id);
-  *(serialized_data) = (unsigned char*)tmp_id;
-  return SUCCESS;
-}
-
-int php_binaryjson_id_unserialize(zval *rval, const unsigned char* p TSRMLS_DC)
-{
-  zval *str;
-  
-  MAKE_STD_ZVAL(str);
-  ZVAL_STRINGL(str, (const char*)p, 24, 1);
-  php_binaryjson_id_populate(rval, str TSRMLS_CC);
-  zval_ptr_dtor(&str);
-
-  return SUCCESS;
 }

@@ -96,27 +96,6 @@ typedef struct {
 	header.response_to = rto; \
 	header.op = opcode;
 
-#define CREATE_RESPONSE_HEADER(buf, ns, rto, opcode) \
-	CREATE_MSG_HEADER(BINARYJSON_G(request_id)++, rto, opcode); \
-	APPEND_HEADER_NS(buf, ns, 0);
-
-#define CREATE_HEADER_WITH_OPTS(buf, ns, opcode, opts) \
-	CREATE_MSG_HEADER(BINARYJSON_G(request_id)++, 0, opcode); \
-	APPEND_HEADER_NS(buf, ns, opts);
-
-#define CREATE_HEADER(buf, ns, opcode) \
-	CREATE_RESPONSE_HEADER(buf, ns, 0, opcode);
-
-#define APPEND_HEADER(buf, opts) buf->pos += INT_32; \
-	php_binaryjson_serialize_int(buf, header.request_id); \
-	php_binaryjson_serialize_int(buf, header.response_to); \
-	php_binaryjson_serialize_int(buf, header.op); \
-	php_binaryjson_serialize_int(buf, opts);
-
-#define APPEND_HEADER_NS(buf, ns, opts) \
-	APPEND_HEADER(buf, opts); \
-	php_binaryjson_serialize_ns(buf, ns TSRMLS_CC);
-
 #define PHP_BINARYJSON_SERIALIZE_KEY(type) \
 	php_binaryjson_set_type(buf, type); \
 	php_binaryjson_serialize_key(buf, name, name_len, prep TSRMLS_CC); \
@@ -126,6 +105,8 @@ typedef struct {
 
 #define DEFAULT_MAX_MESSAGE_SIZE  (32 * 1024 * 1024)
 #define DEFAULT_MAX_DOCUMENT_SIZE (16 * 1024 * 1024)
+
+#define MSG_HEADER_SIZE 20
 
 #define INITIAL_BUF_SIZE 4096
 #define INT_32 4
